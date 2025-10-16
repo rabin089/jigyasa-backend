@@ -3,6 +3,7 @@ import { Column, Entity, ManyToOne, PrimaryGeneratedColumn, CreateDateColumn, Up
 import { ApiProperty } from "@nestjs/swagger";
 import { IdeaVersion } from "src/idea-version/entities/idea-version.entity";
 import { Comment } from "src/comment/entities/comment.entity";
+import { IdeaReaction } from "./idea-reaction.entity";
 
 @Entity()
 export class Idea {
@@ -50,6 +51,9 @@ export class Idea {
 
     @OneToMany(()=> Comment, (comment) => comment.idea)
     comments: Comment[];
+
+    @OneToMany(() => IdeaReaction, (reaction) => reaction.idea)
+    reactions: IdeaReaction[];
 
     @ApiProperty({
         description: 'The date and time when the idea was created',

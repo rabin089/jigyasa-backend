@@ -9,6 +9,8 @@ import { AuthModule } from './auth/auth.module';
 import { IdeasModule } from './ideas/ideas.module';
 import { CommentModule } from './comment/comment.module';
 import { IdeaVersionModule } from './idea-version/idea-version.module';
+import { NotificationModule } from './notification/notification.module';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 
 @Module({
   imports: [
@@ -30,6 +32,8 @@ import { IdeaVersionModule } from './idea-version/idea-version.module';
     IdeasModule,
     CommentModule,
     IdeaVersionModule,
+    NotificationModule,
+    EventEmitterModule.forRoot(),
     
   ],
   controllers: [AppController],

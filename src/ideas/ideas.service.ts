@@ -6,6 +6,8 @@ import { Idea } from './entities/idea.entity';
 import { Repository } from 'typeorm';
 import { User } from 'src/user/entities/user.entity';
 import { IdeaVersion } from 'src/idea-version/entities/idea-version.entity';
+import { IdeaReaction } from './entities/idea-reaction.entity';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 
 @Injectable()
 export class IdeasService {
@@ -15,7 +17,42 @@ export class IdeasService {
     private readonly ideaRepository: Repository<Idea>,
     @InjectRepository(IdeaVersion)
     private readonly ideaVersionRepository: Repository<IdeaVersion>,
+    @InjectRepository(IdeaReaction)
+    private readonly reactionRepository: Repository<IdeaReaction>,
+
+    private eventemitter: EventEmitter2,
   ){}
+
+  // Simple in-memory cache with TTL
+  private topCache: Map<string, { expires: number; data: any } > = new Map();
+  private ideaScoreCache: Map<number, { expires: number; data: { score: number; up: number; down: number } }> = new Map();
+  private readonly DEFAULT_TTL_MS = 10_000;
+
+  private getCachedTop(key: string) {
+    const entry = this.topCache.get(key);
+    if (entry && entry.expires > Date.now()) return entry.data;
+    if (entry) this.topCache.delete(key);
+    return null;
+  }
+  private setCachedTop(key: string, data: any, ttl = this.DEFAULT_TTL_MS) {
+    this.topCache.set(key, { expires: Date.now() + ttl, data });
+  }
+  private invalidateTopCache() {
+    this.topCache.clear();
+  }
+
+  private getCachedIdeaScore(id: number) {
+    const entry = this.ideaScoreCache.get(id);
+    if (entry && entry.expires > Date.now()) return entry.data;
+    if (entry) this.ideaScoreCache.delete(id);
+    return null;
+  }
+  private setCachedIdeaScore(id: number, data: { score: number; up: number; down: number }, ttl = this.DEFAULT_TTL_MS) {
+    this.ideaScoreCache.set(id, { expires: Date.now() + ttl, data });
+  }
+  private invalidateIdeaScore(id: number) {
+    this.ideaScoreCache.delete(id);
+  }
   
   async create(createIdeaDto: CreateIdeaDto, user: User): Promise<Idea> {
     console.log('=== IDEAS SERVICE - CREATE ===');
@@ -26,7 +63,6 @@ export class IdeasService {
     if (!user) {
       throw new ForbiddenException('You must be logged in to create an idea');
     }
-
     const idea = this.ideaRepository.create({
       title: createIdeaDto.title,
       description: createIdeaDto.description,
@@ -52,6 +88,7 @@ export class IdeasService {
 
     return savedIdea;
   }
+ 
 
   async findAll(page: number, limit:number=10): Promise<{data: Idea[], total:number}> {
     const [data, total] = await this.ideaRepository.findAndCount({
@@ -96,6 +133,120 @@ export class IdeasService {
       throw new NotFoundException("Idea not found")
     }
     return idea;
+  }
+
+  // Get reaction aggregates for an idea
+  async getIdeaScore(ideaId: number): Promise<{ score: number; up: number; down: number }> {
+    const cached = this.getCachedIdeaScore(ideaId);
+    if (cached) return cached;
+
+    const qb = this.reactionRepository
+      .createQueryBuilder('r')
+      .select('SUM(r.value)', 'score')
+      .addSelect("SUM(CASE WHEN r.value = 1 THEN 1 ELSE 0 END)", 'up')
+      .addSelect("SUM(CASE WHEN r.value = -1 THEN 1 ELSE 0 END)", 'down')
+      .where('r.ideaId = :ideaId', { ideaId });
+
+    const raw = await qb.getRawOne<{ score: string | null; up: string | null; down: string | null }>();
+    const data = {
+      score: raw?.score ? Number(raw.score) : 0,
+      up: raw?.up ? Number(raw.up) : 0,
+      down: raw?.down ? Number(raw.down) : 0,
+    };
+    this.setCachedIdeaScore(ideaId, data);
+    return data;
+  }
+
+  // Toggle or set a reaction
+  async react(ideaId: number, user: User, value: 1 | -1): Promise<{ ideaId: number; value: 1 | 0 | -1; aggregates: { score: number; up: number; down: number } }> {
+    const idea = await this.ideaRepository.findOne({ where: { id: ideaId }, select: { id: true } });
+    if (!idea) throw new NotFoundException('Idea not found');
+    if (!user) throw new ForbiddenException('You must be logged in to react');
+
+    let reaction = await this.reactionRepository.findOne({ where: { idea: { id: ideaId }, user: { id: user.id } }, relations: ['idea', 'user'] });
+
+    // If same value exists, toggle off (remove reaction)
+    if (reaction && reaction.value === value) {
+      await this.reactionRepository.remove(reaction);
+      this.invalidateIdeaScore(ideaId);
+      this.invalidateTopCache();
+      const aggregates = await this.getIdeaScore(ideaId);
+      return { ideaId, value: 0, aggregates };
+    }
+
+    if (!reaction) {
+      reaction = this.reactionRepository.create({ idea, user, value });
+    } else {
+      reaction.value = value;
+    }
+    await this.reactionRepository.save(reaction);
+
+    // Invalidate caches
+    this.invalidateIdeaScore(ideaId);
+    this.invalidateTopCache();
+
+    const aggregates = await this.getIdeaScore(ideaId);
+    if (value === 1) {
+      this.eventemitter.emit('idea.upvoted', { ideaId, username: user.name });
+    } else if (value === -1) {
+      this.eventemitter.emit('idea.downvoted', { ideaId, username: user.name });
+    }
+    return { ideaId, value, aggregates };
+  }
+
+  // Top-rated ideas by score (sum of reactions)
+  async topRated(limit = 10): Promise<Array<{ id: number; title: string; description: string; authorId: number; createdAt: Date; updatedAt: Date; score: number; up: number; down: number }>> {
+    const cacheKey = `top:${limit}`;
+    const cached = this.getCachedTop(cacheKey);
+    if (cached) return cached;
+
+    const qb = this.ideaRepository
+      .createQueryBuilder('idea')
+      .leftJoin('idea.author', 'author')
+      .leftJoin(IdeaReaction, 'r', 'r.ideaId = idea.id')
+      .select([
+        'idea.id as id',
+        'idea.title as title',
+        'idea.description as description',
+        'idea.createdAt as createdAt',
+        'idea.updatedAt as updatedAt',
+        'author.id as authorId',
+      ])
+      .addSelect('COALESCE(SUM(r.value), 0)', 'score')
+      .addSelect("COALESCE(SUM(CASE WHEN r.value = 1 THEN 1 ELSE 0 END), 0)", 'up')
+      .addSelect("COALESCE(SUM(CASE WHEN r.value = -1 THEN 1 ELSE 0 END), 0)", 'down')
+      .groupBy('idea.id')
+      .addGroupBy('author.id')
+      .orderBy('score', 'DESC')
+      .addOrderBy('idea.createdAt', 'DESC')
+      .limit(limit);
+
+    const rows = await qb.getRawMany<{
+      id: number;
+      title: string;
+      description: string;
+      createdAt: Date;
+      updatedAt: Date;
+      authorId: number;
+      score: string;
+      up: string;
+      down: string;
+    }>();
+
+    const data = rows.map(r => ({
+      id: Number(r.id),
+      title: r.title,
+      description: r.description,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+      authorId: Number(r.authorId),
+      score: r.score ? Number(r.score) : 0,
+      up: r.up ? Number(r.up) : 0,
+      down: r.down ? Number(r.down) : 0,
+    }));
+
+    this.setCachedTop(cacheKey, data);
+    return data;
   }
 
   async update(id: number, updateIdeaDto: UpdateIdeaDto, user: User): Promise<Idea> {

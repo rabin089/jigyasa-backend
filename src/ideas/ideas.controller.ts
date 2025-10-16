@@ -5,6 +5,7 @@ import { CreateIdeaDto } from './dto/create-idea.dto';
 import { UpdateIdeaDto } from './dto/update-idea.dto';
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
 import { Idea } from './entities/idea.entity';
+import { ReactIdeaDto } from './dto/react-idea.dto';
 
 @ApiTags('ideas')
 @ApiBearerAuth('JWT-auth')
@@ -50,6 +51,14 @@ export class IdeasController {
   @ApiResponse({ status: HttpStatus.OK, description: 'Return all ideas with pagination.', type: [Idea] })
   async findAll(@Query() query: {page: number, limit: number}) {
     return this.ideasService.findAll(query.page || 1, query.limit || 10);
+  }
+
+  // Get top-rated ideas by reaction score (place before ':id' to avoid param capture)
+  @Get('top-rated')
+  @ApiOperation({ summary: 'Fetch top-rated ideas by score (upvotes - downvotes)' })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  async topRated(@Query('limit') limit?: number) {
+    return this.ideasService.topRated(Number(limit) || 10);
   }
 
   // Authored ideas of the current user
@@ -108,6 +117,36 @@ export class IdeasController {
   remove(@Param('id') id: string, @Request() req) {
     return this.ideasService.remove(+id, req.user);
   }
+
+  // React to an idea (upvote/downvote). Toggle if same reaction sent twice.
+  @Post(':id/react')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'React (upvote/downvote) to an idea. Send value 1 or -1. Same value toggles off.' })
+  @ApiParam({ name: 'id', description: 'Idea ID' })
+  async react(@Param('id') id: string, @Body() body: ReactIdeaDto, @Request() req) {
+    return this.ideasService.react(+id, req.user, body.value);
+  }
+
+  // Like and Dislike convenience endpoints
+  @Post(':id/like')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Like an idea (upvote). Calling again toggles off.' })
+  @ApiParam({ name: 'id', description: 'Idea ID' })
+  async like(@Param('id') id: string, @Request() req) {
+    return this.ideasService.react(+id, req.user, 1);
+  }
+
+  @Post(':id/dislike')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Dislike an idea (downvote). Calling again toggles off.' })
+  @ApiParam({ name: 'id', description: 'Idea ID' })
+  async dislike(@Param('id') id: string, @Request() req) {
+    return this.ideasService.react(+id, req.user, -1 as 1 | -1);
+  }
+
 
   // Versioning endpoints
   @Get(':id/versions')

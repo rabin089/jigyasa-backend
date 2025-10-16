@@ -6,6 +6,7 @@ import { Repository } from 'typeorm';
 import { NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Idea } from 'src/ideas/entities/idea.entity';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 
 @Injectable()
 export class CommentService {
@@ -17,6 +18,7 @@ export class CommentService {
         private readonly userRepository: Repository<User>,
         @InjectRepository(Idea)
         private readonly ideaRepository: Repository<Idea>,
+        private eventEmitter: EventEmitter2,
       ) {}
     
       // Add comment to an idea
@@ -43,7 +45,9 @@ export class CommentService {
     parent: parentComment || undefined,
   });
 
-  return this.commentRepository.save(comment);
+  const saved = await this.commentRepository.save(comment);
+  this.eventEmitter.emit('idea.commented', { ideaId, username: user.name });
+  return saved;
 }
 
 // Find all comments by idea ID
