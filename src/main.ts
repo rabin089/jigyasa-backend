@@ -10,7 +10,7 @@ async function bootstrap() {
 
   // Enable CORS for Swagger UI
   app.enableCors({
-    origin: true,
+    origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
   });
@@ -50,7 +50,8 @@ SwaggerModule.setup('api', app, document, {
 });
 
 app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
-  await app.listen(process.env.PORT ?? 3000);
-  console.log(`Jigyasa API running on http://localhost:${process.env.PORT ?? 3000}/api/v1`);
+  const port = Number(process.env.PORT ?? 3000);
+  await app.listen(port, '0.0.0.0');
+  console.log(`Jigyasa API running on http://localhost:${port}/api/v1`);
 }
 bootstrap();
