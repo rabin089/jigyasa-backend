@@ -66,6 +66,8 @@ export class IdeasService {
     const idea = this.ideaRepository.create({
       title: createIdeaDto.title,
       description: createIdeaDto.description,
+      imageUrl: (createIdeaDto as any).imageUrl,
+      category: (createIdeaDto as any).category,
       author: user,
     });
 
@@ -187,9 +189,9 @@ export class IdeasService {
 
     const aggregates = await this.getIdeaScore(ideaId);
     if (value === 1) {
-      this.eventemitter.emit('idea.upvoted', { ideaId, username: user.name });
+      this.eventemitter.emit('idea.upvoted', { ideaId, username: user.name, userId: user.id });
     } else if (value === -1) {
-      this.eventemitter.emit('idea.downvoted', { ideaId, username: user.name });
+      this.eventemitter.emit('idea.downvoted', { ideaId, username: user.name, userId: user.id });
     }
     return { ideaId, value, aggregates };
   }

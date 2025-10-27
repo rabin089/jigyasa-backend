@@ -1,4 +1,4 @@
-import { IsInt, IsNotEmpty, IsString, IsOptional, MinLength, MaxLength, IsDefined } from "class-validator";
+import { IsInt, IsNotEmpty, IsString, IsOptional, MinLength, MaxLength } from "class-validator";
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { Transform } from 'class-transformer';
 
@@ -24,6 +24,24 @@ export class CreateIdeaDto {
   @MaxLength(5000, { message: 'Description must not exceed 5000 characters' })
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   description: string;
+
+  @ApiPropertyOptional({
+    description: 'Optional image URL for the idea',
+    example: 'https://example.com/image.png',
+  })
+  @IsOptional()
+  @IsString({ message: 'Image URL must be a string' })
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  imageUrl?: string;
+
+  @ApiPropertyOptional({
+    description: 'Optional category for the idea',
+    example: 'Productivity',
+  })
+  @IsOptional()
+  @IsString({ message: 'Category must be a string' })
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  category?: string;
 
   @ApiPropertyOptional({
     description: 'ID of the author (user) creating the idea - automatically set from authenticated user',

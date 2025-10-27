@@ -27,4 +27,18 @@ export class UpdateIdeaDto extends PartialType(CreateIdeaDto) {
     required: false
   })
   authorId?: number;
+
+  @ApiProperty({
+    description: 'Optional image URL for the idea',
+    example: 'https://example.com/image.png',
+    required: false
+  })
+  imageUrl?: string;
+
+  @ApiProperty({
+    description: 'Optional category for the idea',
+    example: 'Productivity',
+    required: false
+  })
+  category?: string;
 }

@@ -33,6 +33,22 @@ export class Idea {
     description: string;
 
     @ApiProperty({
+        description: 'Optional image URL for the idea',
+        required: false,
+        example: 'https://example.com/image.png',
+    })
+    @Column({ type: 'text', nullable: true })
+    imageUrl?: string | null;
+
+    @ApiProperty({
+        description: 'Optional category for the idea',
+        required: false,
+        example: 'Productivity',
+    })
+    @Column({ type: 'varchar', length: 50, nullable: true })
+    category?: string | null;
+
+    @ApiProperty({
         description: 'The author of the idea',
         type: () => User,
     })

@@ -46,7 +46,7 @@ export class CommentService {
   });
 
   const saved = await this.commentRepository.save(comment);
-  this.eventEmitter.emit('idea.commented', { ideaId, username: user.name });
+  this.eventEmitter.emit('idea.commented', { ideaId, username: user.name, userId: user.id });
   return saved;
 }
 
@@ -107,7 +107,7 @@ async findAllCommentsByIdea(ideaId: number): Promise<Comment[]>{
   async replyToComment(parentId: number, content: string, user: User): Promise<Comment> {
     const parent = await this.commentRepository.findOne({
       where: { id: parentId },
-      relations: ['idea'],
+      relations: ['idea', 'author'],
     });
     if (!parent) throw new NotFoundException('Parent comment not found');
 
@@ -117,7 +117,15 @@ async findAllCommentsByIdea(ideaId: number): Promise<Comment[]>{
       idea: parent.idea,
       parent,
     });
-    return this.commentRepository.save(comment);
+    const saved = await this.commentRepository.save(comment);
+    this.eventEmitter.emit('comment.replied', {
+      ideaId: parent.idea.id,
+      parentCommentId: parent.id,
+      parentAuthorId: parent.author.id,
+      username: user.name,
+      userId: user.id,
+    });
+    return saved;
   }
 
   //  get top-level threads with reply preview and counts

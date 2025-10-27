@@ -101,6 +101,10 @@ export class IdeasController {
   @ApiResponse({ status: HttpStatus.NOT_FOUND, description: 'Idea not found' })
   @ApiResponse({ status: HttpStatus.UNAUTHORIZED, description: 'Unauthorized.' })
   @ApiResponse({ status: HttpStatus.FORBIDDEN, description: 'Forbidden.' })
+  @UsePipes(new ValidationPipe({
+    whitelist: true,
+    transform: true,
+  }))
   update(@Param('id') id: string, @Body() updateIdeaDto: UpdateIdeaDto, @Request() req) {
     return this.ideasService.update(+id, updateIdeaDto, req.user);
   }
