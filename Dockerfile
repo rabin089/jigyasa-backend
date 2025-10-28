@@ -1,40 +1,44 @@
-# Multi-stage build for NestJS (Node 20)
-
-# 1) Builder: install deps and build TS -> JS
+# Stage 1: Build the application
 FROM node:20-alpine AS builder
+
+# Create app directory
 WORKDIR /app
 
-# Install dependencies first (better cache)
+# Copy package files
 COPY package*.json ./
+
+# Install dependencies including devDependencies for building
 RUN npm ci
 
-# Copy source and build
-COPY tsconfig*.json ./
-COPY nest-cli.json ./
-COPY src ./src
-COPY .eslint* .prettierrc ./
+# Copy source code
+COPY . .
+
+# Build the application
 RUN npm run build
 
-# 2) Runtime: smaller image with only prod deps and dist
-FROM node:20-alpine AS runtime
+# Stage 2: Create the runtime image
+FROM node:20-alpine
+
+# Install curl for healthcheck
+RUN apk add --no-cache curl
+
+# Create app directory
 WORKDIR /app
 
-# Copy package files and install only production deps
+# Copy package files
 COPY package*.json ./
+
+# Install only production dependencies
 RUN npm ci --omit=dev && npm cache clean --force
 
-# Copy compiled app from builder
+# Copy built application from builder
 COPY --from=builder /app/dist ./dist
 
-# If you serve static assets or need other files at runtime, copy them here
-# COPY public ./public
-
-# Environment
-ENV NODE_ENV=production
-# The app reads DB_* and JWT_* from environment variables
-
-# Expose the Nest default port
+# Expose the port the app runs on
 EXPOSE 3000
 
-# Start the app
-CMD ["npm", "run", "start:prod"]
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --retries=5 CMD curl -f http://localhost:3000/api/v1/health || exit 1
+
+# Command to run the application
+CMD ["node", "dist/main"]

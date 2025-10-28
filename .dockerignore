@@ -8,5 +8,4 @@ Dockerfile*
 coverage
 .eslintcache
 dist
-**/*.ts
 src/**/*.spec.ts
