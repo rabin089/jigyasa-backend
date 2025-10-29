@@ -4,12 +4,15 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Idea } from 'src/ideas/entities/idea.entity';
 import { NotificationGateway } from './notification.gateway';
+import { Notification as NotificationEntity, NotificationType } from './notification.entity';
 
 @Injectable()
 export class NotificationService {
   constructor(
     @InjectRepository(Idea)
     private readonly ideaRepo: Repository<Idea>,
+    @InjectRepository(NotificationEntity)
+    private readonly notifRepo: Repository<NotificationEntity>,
     private readonly gateway: NotificationGateway,
   ) {}
 
@@ -22,16 +25,44 @@ export class NotificationService {
     return idea?.author?.id ?? null;
   }
 
+  private async createAndEmit(userId: number, payload: {
+    type: NotificationType;
+    ideaId: number;
+    message: string;
+    parentCommentId?: number;
+  }) {
+    // Persist
+    const entity = this.notifRepo.create({
+      user: { id: userId } as any,
+      type: payload.type,
+      ideaId: payload.ideaId,
+      parentId: payload.parentCommentId ?? null,
+      message: payload.message,
+    });
+    await this.notifRepo.save(entity);
+
+    // Emit realtime
+    this.gateway.notifyUser(userId, 'notification', {
+      type: payload.type,
+      ideaId: payload.ideaId,
+      parentCommentId: payload.parentCommentId,
+      message: payload.message,
+      at: new Date().toISOString(),
+      id: entity.id,
+      read: false,
+    });
+  }
+
+  // Event handlers
   @OnEvent('idea.commented')
   async handleIdeaCommentedEvent(payload: { ideaId: number; username: string; userId?: number }) {
     const authorId = await this.getAuthorId(payload.ideaId);
     if (!authorId) return;
     if (payload.userId && payload.userId === authorId) return; // avoid self-notify
-    this.gateway.notifyUser(authorId, 'notification', {
+    await this.createAndEmit(authorId, {
       type: 'comment',
       ideaId: payload.ideaId,
       message: `New comment on your idea by ${payload.username}`,
-      at: new Date().toISOString(),
     });
   }
 
@@ -40,11 +71,10 @@ export class NotificationService {
     const authorId = await this.getAuthorId(payload.ideaId);
     if (!authorId) return;
     if (payload.userId && payload.userId === authorId) return;
-    this.gateway.notifyUser(authorId, 'notification', {
+    await this.createAndEmit(authorId, {
       type: 'upvote',
       ideaId: payload.ideaId,
       message: `${payload.username} liked your idea`,
-      at: new Date().toISOString(),
     });
   }
 
@@ -53,11 +83,10 @@ export class NotificationService {
     const authorId = await this.getAuthorId(payload.ideaId);
     if (!authorId) return;
     if (payload.userId && payload.userId === authorId) return;
-    this.gateway.notifyUser(authorId, 'notification', {
+    await this.createAndEmit(authorId, {
       type: 'downvote',
       ideaId: payload.ideaId,
       message: `${payload.username} disliked your idea`,
-      at: new Date().toISOString(),
     });
   }
 
@@ -66,24 +95,62 @@ export class NotificationService {
     const authorId = await this.getAuthorId(payload.ideaId);
     if (!authorId) return;
     if (payload.userId && payload.userId === authorId) return;
-    this.gateway.notifyUser(authorId, 'notification', {
+    await this.createAndEmit(authorId, {
       type: 'share',
       ideaId: payload.ideaId,
       message: `${payload.username} shared your idea`,
-      at: new Date().toISOString(),
     });
   }
 
   @OnEvent('comment.replied')
   async handleCommentRepliedEvent(payload: { ideaId: number; parentCommentId: number; parentAuthorId: number; username: string; userId: number }) {
     if (!payload?.parentAuthorId) return;
-    if (payload.userId === payload.parentAuthorId) return; 
-    this.gateway.notifyUser(payload.parentAuthorId, 'notification', {
+    if (payload.userId === payload.parentAuthorId) return;
+    await this.createAndEmit(payload.parentAuthorId, {
       type: 'reply',
       ideaId: payload.ideaId,
       parentCommentId: payload.parentCommentId,
       message: `${payload.username} replied to your comment`,
-      at: new Date().toISOString(),
     });
+  }
+
+  // REST support methods
+  async list(userId: number, opts: { onlyUnread: boolean; limit: number; skip: number }) {
+    const qb = this.notifRepo.createQueryBuilder('n')
+      .where('n.userId = :userId', { userId })
+      .orderBy('n.createdAt', 'DESC')
+      .take(opts.limit)
+      .skip(opts.skip);
+
+    if (opts.onlyUnread) {
+      qb.andWhere('n.read = :read', { read: false });
+    }
+
+    const items = await qb.getMany();
+    return {
+      items,
+      pageInfo: { nextSkip: opts.skip + items.length, hasMore: items.length === opts.limit },
+    };
+    // Note: For accurate hasMore, you could also query total count.
+  }
+
+  async markRead(userId: number, id: number) {
+    const res = await this.notifRepo.update({ id, user: { id: userId } as any }, { read: true });
+    // Optionally return not found if affected === 0
+    return res.affected ?? 0;
+  }
+
+  async markAllRead(userId: number) {
+    const res = await this.notifRepo.createQueryBuilder()
+      .update(NotificationEntity)
+      .set({ read: true })
+      .where('userId = :userId', { userId })
+      .andWhere('read = :read', { read: false })
+      .execute();
+    return res.affected ?? 0;
+  }
+
+  async deleteOne(userId: number, id: number) {
+    await this.notifRepo.delete({ id, user: { id: userId } as any });
   }
 }
