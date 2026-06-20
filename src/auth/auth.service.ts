@@ -1,4 +1,8 @@
-import { Injectable, UnauthorizedException, Inject } from '@nestjs/common';
+import {
+  Injectable,
+  UnauthorizedException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { CreateAuthDto } from './dto/create-auth.dto';
 import { LoginDto } from './dto/login.dto';
 import { Repository } from 'typeorm';
@@ -6,6 +10,9 @@ import { User } from 'src/user/entities/user.entity';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
+import { cert, getApps, initializeApp } from 'firebase-admin/app';
+import { DecodedIdToken, getAuth } from 'firebase-admin/auth';
 
 @Injectable()
 export class AuthService {
@@ -13,7 +20,10 @@ export class AuthService {
     @InjectRepository(User)
     private userRepository: Repository<User>,
     private jwtService: JwtService,
-  ) {}
+    private configService: ConfigService,
+  ) {
+    this.initializeFirebase();
+  }
   async create(createAuthDto: CreateAuthDto) {
     // Input validation
     if (!createAuthDto.email || !createAuthDto.password) {
@@ -77,6 +87,40 @@ export class AuthService {
 
   }
 
+  async googleLogin(idToken: string) {
+    let decodedToken: DecodedIdToken;
+
+    try {
+      decodedToken = await getAuth().verifyIdToken(idToken);
+    } catch {
+      throw new UnauthorizedException('Invalid Firebase token');
+    }
+
+    if (!decodedToken.email) {
+      throw new UnauthorizedException('Firebase account does not have an email');
+    }
+
+    let user = await this.userRepository.findOne({
+      where: { firebaseUid: decodedToken.uid },
+    });
+
+    if (!user) {
+      user = await this.userRepository.findOne({
+        where: { email: decodedToken.email },
+      });
+    }
+
+    if (!user) {
+      user = await this.createFirebaseUser(decodedToken);
+    } else if (!user.firebaseUid) {
+      user.firebaseUid = decodedToken.uid;
+      user.authProvider = 'google';
+      user = await this.userRepository.save(user);
+    }
+
+    return this.buildAuthResponse(user);
+  }
+
   async validateUser(email: string, password: string): Promise<any> {
     const user = await this.userRepository.findOne({ where: { email } });
     
@@ -93,5 +137,83 @@ export class AuthService {
 
  
 
- 
+  private initializeFirebase() {
+    if (getApps().length) {
+      return;
+    }
+
+    const projectId = this.configService.get<string>('FIREBASE_PROJECT_ID');
+    const clientEmail = this.configService.get<string>('FIREBASE_CLIENT_EMAIL');
+    const privateKey = this.configService
+      .get<string>('FIREBASE_PRIVATE_KEY')
+      ?.replace(/\\n/g, '\n');
+
+    if (!projectId || !clientEmail || !privateKey) {
+      throw new InternalServerErrorException(
+        'Firebase admin credentials are not configured',
+      );
+    }
+
+    initializeApp({
+      credential: cert({
+        projectId,
+        clientEmail,
+        privateKey,
+      }),
+    });
+  }
+
+  private async createFirebaseUser(
+    decodedToken: DecodedIdToken,
+  ): Promise<User> {
+    const emailPrefix = decodedToken.email?.split('@')[0] || 'googleuser';
+    const username = await this.generateUniqueUsername(emailPrefix);
+    const password = await bcrypt.hash(decodedToken.uid, 10);
+
+    const user = this.userRepository.create({
+      name: decodedToken.name || emailPrefix,
+      email: decodedToken.email,
+      username,
+      password,
+      firebaseUid: decodedToken.uid,
+      authProvider: 'google',
+    });
+
+    return this.userRepository.save(user);
+  }
+
+  private async generateUniqueUsername(base: string): Promise<string> {
+    const sanitizedBase = base
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, '')
+      .slice(0, 20) || 'googleuser';
+
+    let username = sanitizedBase;
+    let suffix = 1;
+
+    while (await this.userRepository.findOne({ where: { username } })) {
+      username = `${sanitizedBase}${suffix}`;
+      suffix += 1;
+    }
+
+    return username;
+  }
+
+  private buildAuthResponse(user: User) {
+    const payLoad = {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+    };
+
+    return {
+      access_token: this.jwtService.sign(payLoad),
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+      },
+    };
+  }
 }

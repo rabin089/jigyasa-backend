@@ -18,6 +18,12 @@ export class User {
     @Column()
     password: string;
 
+    @Column({ nullable: true, unique: true })
+    firebaseUid?: string;
+
+    @Column({ nullable: true })
+    authProvider?: string;
+
     @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
     createdAt: Date;
 
